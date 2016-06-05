@@ -42,3 +42,9 @@ config EXT2_FS_SECURITY
 
 	  If you are not using a security module that requires using
 	  extended attributes for file security labels, say N.
+
+config EXT2_FS_COW
+	bool "Copy on write"
+	depends on EXT2_FS
+	help
+	  Copy on write support for ext2 filesystem.
