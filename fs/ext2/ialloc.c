@@ -565,6 +565,9 @@ got:
 	ei->i_block_group = group;
 	ei->i_dir_start_lookup = 0;
 	ei->i_state = EXT2_STATE_NEW;
+#ifdef CONFIG_EXT2_FS_COW
+	ei->i_cow_next = ei->i_cow_prev = ino;
+#endif
 	ext2_set_inode_flags(inode);
 	spin_lock(&sbi->s_next_gen_lock);
 	inode->i_generation = sbi->s_next_generation++;

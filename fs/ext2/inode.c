@@ -1378,9 +1378,12 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	ei->i_block_group = (ino - 1) / EXT2_INODES_PER_GROUP(inode->i_sb);
 	ei->i_dir_start_lookup = 0;
 
-#ifdef CONFIG_EXT2_FS_COW_
-	ei->i_cow_next = le32_to_cpu(raw_inode->osd1->linux1->l_i_cow_next);
-	ei->i_cow_prev = le32_to_cpu(raw_inode->osd2->linux2->l_i_cow_prev);
+#ifdef CONFIG_EXT2_FS_COW
+	ei->i_cow_next = le32_to_cpu(raw_inode->osd1.linux1.l_i_cow_next);
+	ei->i_cow_prev = le32_to_cpu(raw_inode->osd2.linux2.l_i_cow_prev);
+
+	if (ei->i_cow_next == 0)
+		ei->i_cow_next = ei->i_cow_prev = ino;
 #endif
 
 	/*

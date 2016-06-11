@@ -811,6 +811,9 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_sb_block = sb_block;
 
 	spin_lock_init(&sbi->s_lock);
+#ifdef CONFIG_EXT2_FS_COW
+	mutex_init(&sbi->cow_mutex);
+#endif
 
 	/*
 	 * See what the current blocksize for the device is, and

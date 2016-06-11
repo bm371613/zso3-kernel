@@ -111,6 +111,10 @@ struct ext2_sb_info {
 	 * of the mount options.
 	 */
 	spinlock_t s_lock;
+
+#ifdef CONFIG_EXT2_FS_COW
+	struct mutex cow_mutex;
+#endif
 };
 
 static inline spinlock_t *
