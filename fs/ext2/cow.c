@@ -82,3 +82,27 @@ int ext2_cow_inode(struct inode *src, struct inode *dst)
 
 	return 0;
 }
+
+int ext2_cow_shared(struct inode *inode, unsigned long block)
+{
+	struct ext2_inode_info *info = EXT2_I(inode), *other_info;
+	struct inode *other;
+	unsigned long block_le = cpu_to_le32(block);
+	int i, ret = 0, other_ino = info->i_cow_next;
+
+	while (other_ino != inode->i_ino) {
+		other = ext2_iget(inode->i_sb, other_ino);
+		other_info = EXT2_I(other);
+		// TODO check indirect
+		for (i = 0; i < 15; ++i)
+			if (other_info->i_data[i] == block_le) {
+				iput(other);
+				ret = 1;
+				goto out;
+			}
+		other_ino = other_info->i_cow_next;
+		iput(other);
+	}
+out:
+	return ret;
+}

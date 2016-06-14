@@ -35,6 +35,7 @@
 #include "ext2.h"
 #include "acl.h"
 #include "xattr.h"
+#include "cow.h"
 
 static int __ext2_write_inode(struct inode *inode, int do_sync);
 
@@ -90,6 +91,12 @@ void ext2_evict_inode(struct inode * inode)
 		if (inode->i_blocks)
 			ext2_truncate_blocks(inode, 0);
 		ext2_xattr_delete_inode(inode);
+
+#ifdef CONFIG_EXT2_FS_COW
+		mutex_lock(&EXT2_SB(inode->i_sb)->cow_mutex);
+		ext2_cow_remove(inode);
+		mutex_unlock(&EXT2_SB(inode->i_sb)->cow_mutex);
+#endif
 	}
 
 	invalidate_inode_buffers(inode);

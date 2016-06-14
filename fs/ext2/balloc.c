@@ -12,6 +12,7 @@
  */
 
 #include "ext2.h"
+#include "cow.h"
 #include <linux/quotaops.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
@@ -536,6 +537,13 @@ do_more:
 	}
 
 	for (i = 0, group_freed = 0; i < count; i++) {
+#ifdef CONFIG_EXT2_FS_COW
+		mutex_lock(&sbi->cow_mutex);
+		if (ext2_cow_shared(inode, block + i)) {
+			mutex_unlock(&sbi->cow_mutex);
+			continue;
+		}
+#endif
 		if (!ext2_clear_bit_atomic(sb_bgl_lock(sbi, block_group),
 						bit + i, bitmap_bh->b_data)) {
 			ext2_error(sb, __func__,
@@ -543,6 +551,9 @@ do_more:
 		} else {
 			group_freed++;
 		}
+#ifdef CONFIG_EXT2_FS_COW
+		mutex_unlock(&sbi->cow_mutex);
+#endif
 	}
 
 	mark_buffer_dirty(bitmap_bh);
