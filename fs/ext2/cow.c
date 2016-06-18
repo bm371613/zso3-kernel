@@ -1,5 +1,7 @@
+#include <linux/buffer_head.h>
 #include <linux/fs.h>
 #include <linux/spinlock.h>
+#include <linux/writeback.h>
 #include "cow.h"
 #include "ext2.h"
 
@@ -78,6 +80,10 @@ int ext2_cow_inode(struct inode *src, struct inode *dst)
 		ext2_cow_insert(src, dst);
 
 		mutex_unlock(&sbi->cow_mutex);
+
+		invalidate_mapping_pages(dst->i_mapping, 0, -1);
+		invalidate_inode_buffers(dst);
+		wakeup_flusher_threads(0, WB_REASON_SYNC);
 	}
 
 	return 0;
