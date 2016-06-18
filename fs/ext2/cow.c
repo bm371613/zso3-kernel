@@ -37,7 +37,7 @@ void ext2_cow_remove(struct inode *inode) {
 
 void ext2_cow_insert(struct inode *where, struct inode *what) {
 	struct ext2_inode_info *where_info = EXT2_I(where),
-			       *what_info = EXT2_I(what);
+			*what_info = EXT2_I(what);
 	struct inode *next = ext2_iget(where->i_sb, where_info->i_cow_next);
 
 	spin_lock(&what->i_lock);
@@ -93,8 +93,9 @@ int ext2_cow_shared(struct inode *inode, unsigned long block)
 {
 	struct ext2_inode_info *info = EXT2_I(inode), *other_info;
 	struct inode *other;
-	unsigned long block_le = cpu_to_le32(block);
-	int i, ret = 0, other_ino = info->i_cow_next;
+	unsigned long other_ino = info->i_cow_next,
+			block_le = cpu_to_le32(block);
+	int i, ret = 0;
 
 	while (other_ino != inode->i_ino) {
 		other = ext2_iget(inode->i_sb, other_ino);
