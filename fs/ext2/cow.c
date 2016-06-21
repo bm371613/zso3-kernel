@@ -100,7 +100,6 @@ int ext2_cow_shared(struct inode *inode, unsigned long block)
 	while (other_ino != inode->i_ino) {
 		other = ext2_iget(inode->i_sb, other_ino);
 		other_info = EXT2_I(other);
-		// TODO check indirect
 		for (i = 0; i < 15; ++i)
 			if (other_info->i_data[i] == block_le) {
 				iput(other);

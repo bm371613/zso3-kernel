@@ -159,18 +159,24 @@ int ext2_cow_shared_depth(struct inode *inode, int depth, int *offsets,
 		partial = ext2_get_branch(other, depth, offsets, other_chain,
 				&err);
 		if (err) {
+			while (partial > chain) {
+				brelse(partial->bh);
+				chain--;
+			}
 			iput(other);
 			return err;
 		}
-		if (!partial) {
-			for (i = 0; i < depth; ++i) {
-				if (chain[i].key == other_chain[i].key) {
-					if (ret == 0 || i + 1 < ret) {
-						ret = i + 1;
-					}
-					break;
+		for (i = 0; i < depth; ++i) {
+			if (chain[i].key == other_chain[i].key) {
+				if (ret == 0 || i + 1 < ret) {
+					ret = i + 1;
 				}
+				break;
 			}
+		}
+		while (partial > chain) {
+			brelse(partial->bh);
+			chain--;
 		}
 		other_ino = EXT2_I(other)->i_cow_next;
 		iput(other);
@@ -210,6 +216,7 @@ Indirect *ext2_cow_get_branch(struct inode *inode, int depth, int *offsets,
 		goto failure;
 	if (*shared_depth) {
 		memcpy(copy_chain, chain, depth * sizeof(Indirect));
+		p = chain + *shared_depth - 1;
 		goto no_block;
 	}
 	return NULL;
@@ -759,9 +766,9 @@ static int ext2_get_blocks(struct inode *inode,
 
 #ifdef CONFIG_EXT2_FS_COW
 	partial = create
-		? ext2_get_branch(inode, depth, offsets, chain, &err)
-		: ext2_cow_get_branch(inode, depth, offsets, chain, &err,
-				copy_chain, &shared_depth);
+		? ext2_cow_get_branch(inode, depth, offsets, chain, &err,
+				copy_chain, &shared_depth)
+		: ext2_get_branch(inode, depth, offsets, chain, &err);
 #else
 	partial = ext2_get_branch(inode, depth, offsets, chain, &err);
 #endif
@@ -818,12 +825,10 @@ static int ext2_get_blocks(struct inode *inode,
 			partial--;
 		}
 #ifdef CONFIG_EXT2_FS_COW
-		if (!create)
-			mutex_lock(&EXT2_SB(inode->i_sb)->cow_mutex);
 		partial = create
-			? ext2_get_branch(inode, depth, offsets, chain, &err)
-			: ext2_cow_get_branch(inode, depth, offsets, chain,
-					&err, copy_chain, &shared_depth);
+			? ext2_cow_get_branch(inode, depth, offsets, chain,
+					&err, copy_chain, &shared_depth)
+			: ext2_get_branch(inode, depth, offsets, chain, &err);
 #else
 		partial = ext2_get_branch(inode, depth, offsets, chain, &err);
 #endif
@@ -836,9 +841,6 @@ static int ext2_get_blocks(struct inode *inode,
 			goto got_it;
 		}
 	}
-
-	if (shared_depth > 0)
-		mpage_readpage(bh_result->b_page, ext2_get_block);
 
 	/*
 	 * Okay, we need to do block allocation.  Lazily initialize the block
@@ -886,8 +888,6 @@ static int ext2_get_blocks(struct inode *inode,
 	if (shared_depth > 0)
 		ext2_cow_copy_blocks_chain(copy_chain, chain, shared_depth,
 				depth, offsets);
-	if (!create)
-		mutex_lock(&EXT2_SB(inode->i_sb)->cow_mutex);
 	mutex_unlock(&ei->truncate_mutex);
 	set_buffer_new(bh_result);
 got_it:
