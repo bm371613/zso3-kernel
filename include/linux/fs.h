@@ -1704,6 +1704,8 @@ struct super_operations {
 				  struct shrink_control *);
 	long (*free_cached_objects)(struct super_block *,
 				    struct shrink_control *);
+
+	int (*cow_inode)(struct inode *src, struct inode *dst);
 };
 
 /*

@@ -35,6 +35,7 @@
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"
+#include "cow.h"
 
 static void ext2_sync_super(struct super_block *sb,
 			    struct ext2_super_block *es, int wait);
@@ -330,6 +331,9 @@ static const struct super_operations ext2_sops = {
 	.quota_read	= ext2_quota_read,
 	.quota_write	= ext2_quota_write,
 	.get_dquots	= ext2_get_dquots,
+#endif
+#ifdef CONFIG_EXT2_FS_COW
+	.cow_inode	= ext2_cow_inode,
 #endif
 };
 
@@ -807,6 +811,9 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_sb_block = sb_block;
 
 	spin_lock_init(&sbi->s_lock);
+#ifdef CONFIG_EXT2_FS_COW
+	mutex_init(&sbi->cow_mutex);
+#endif
 
 	/*
 	 * See what the current blocksize for the device is, and

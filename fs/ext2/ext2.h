@@ -111,6 +111,10 @@ struct ext2_sb_info {
 	 * of the mount options.
 	 */
 	spinlock_t s_lock;
+
+#ifdef CONFIG_EXT2_FS_COW
+	struct mutex cow_mutex;
+#endif
 };
 
 static inline spinlock_t *
@@ -308,7 +312,11 @@ struct ext2_inode {
 	__le32	i_flags;	/* File flags */
 	union {
 		struct {
+#ifdef CONFIG_EXT2_FS_COW
+			__le32	l_i_cow_next;
+#else
 			__le32  l_i_reserved1;
+#endif
 		} linux1;
 		struct {
 			__le32  h_i_translator;
@@ -329,7 +337,11 @@ struct ext2_inode {
 			__u16	i_pad1;
 			__le16	l_i_uid_high;	/* these 2 fields    */
 			__le16	l_i_gid_high;	/* were reserved2[0] */
+#ifdef CONFIG_EXT2_FS_COW
+			__le32	l_i_cow_prev;
+#else
 			__u32	l_i_reserved2;
+#endif
 		} linux2;
 		struct {
 			__u8	h_i_frag;	/* Fragment number */
@@ -696,6 +708,10 @@ struct ext2_inode_info {
 	struct list_head i_orphan;	/* unlinked but open inodes */
 #ifdef CONFIG_QUOTA
 	struct dquot *i_dquot[MAXQUOTAS];
+#endif
+#ifdef CONFIG_EXT2_FS_COW
+	unsigned long	i_cow_next;
+	unsigned long	i_cow_prev;
 #endif
 };
 

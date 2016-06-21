@@ -35,6 +35,7 @@
 #include "ext2.h"
 #include "acl.h"
 #include "xattr.h"
+#include "cow.h"
 
 static int __ext2_write_inode(struct inode *inode, int do_sync);
 
@@ -90,6 +91,12 @@ void ext2_evict_inode(struct inode * inode)
 		if (inode->i_blocks)
 			ext2_truncate_blocks(inode, 0);
 		ext2_xattr_delete_inode(inode);
+
+#ifdef CONFIG_EXT2_FS_COW
+		mutex_lock(&EXT2_SB(inode->i_sb)->cow_mutex);
+		ext2_cow_remove(inode);
+		mutex_unlock(&EXT2_SB(inode->i_sb)->cow_mutex);
+#endif
 	}
 
 	invalidate_inode_buffers(inode);
@@ -125,6 +132,125 @@ static inline int verify_chain(Indirect *from, Indirect *to)
 		from++;
 	return (from > to);
 }
+
+#ifdef CONFIG_EXT2_FS_COW
+static Indirect *ext2_get_branch(struct inode *inode,
+				 int depth,
+				 int *offsets,
+				 Indirect chain[4],
+				 int *err);
+
+int ext2_cow_shared_depth(struct inode *inode, int depth, int *offsets,
+		Indirect chain[4]) {
+	struct ext2_inode_info *info = EXT2_I(inode);
+	struct inode *other;
+	unsigned long other_ino;
+
+	int i, err, ret = 0;
+	Indirect other_chain[4];
+	Indirect *partial;
+
+	if (info->i_cow_next == inode->i_ino)
+		goto out;
+
+	other_ino = info->i_cow_next;
+	while (other_ino != inode->i_ino) {
+		other = ext2_iget(inode->i_sb, other_ino);
+		partial = ext2_get_branch(other, depth, offsets, other_chain,
+				&err);
+		if (err) {
+			while (partial > chain) {
+				brelse(partial->bh);
+				chain--;
+			}
+			iput(other);
+			return err;
+		}
+		for (i = 0; i < depth; ++i) {
+			if (chain[i].key == other_chain[i].key) {
+				if (ret == 0 || i + 1 < ret) {
+					ret = i + 1;
+				}
+				break;
+			}
+		}
+		while (partial > chain) {
+			brelse(partial->bh);
+			chain--;
+		}
+		other_ino = EXT2_I(other)->i_cow_next;
+		iput(other);
+	}
+
+out:
+	return ret;
+}
+
+Indirect *ext2_cow_get_branch(struct inode *inode, int depth, int *offsets,
+		Indirect chain[4], int *err, Indirect copy_chain[4],
+		int *shared_depth) {
+	struct super_block *sb = inode->i_sb;
+	Indirect *p = chain;
+	struct buffer_head *bh;
+	int i;
+
+	*err = 0;
+	/* i_data is not going away, no lock needed */
+	add_chain (chain, NULL, EXT2_I(inode)->i_data + *offsets);
+	if (!p->key)
+		goto no_block;
+	for (i = 1; i < depth; ++i) {
+		bh = sb_bread(sb, le32_to_cpu(p->key));
+		if (!bh)
+			goto failure;
+		read_lock(&EXT2_I(inode)->i_meta_lock);
+		if (!verify_chain(chain, p))
+			goto changed;
+		add_chain(++p, bh, (__le32*)bh->b_data + *(offsets + i));
+		read_unlock(&EXT2_I(inode)->i_meta_lock);
+		if (!p->key)
+			goto no_block;
+	}
+	*shared_depth = ext2_cow_shared_depth(inode, depth, offsets, chain);
+	if (*shared_depth < 0)
+		goto failure;
+	if (*shared_depth) {
+		memcpy(copy_chain, chain, depth * sizeof(Indirect));
+		p = chain + *shared_depth - 1;
+		goto no_block;
+	}
+	return NULL;
+changed:
+	read_unlock(&EXT2_I(inode)->i_meta_lock);
+	brelse(bh);
+	*err = -EAGAIN;
+	goto no_block;
+failure:
+	*err = -EIO;
+no_block:
+	return p;
+}
+
+static void ext2_cow_copy_blocks_chain(Indirect src_chain[4],
+		Indirect dst_chain[4], int shared_depth, int depth,
+		int offsets[4]) {
+	int i;
+
+	for (i = shared_depth; i < depth; ++i) {
+		lock_buffer(dst_chain[i].bh);
+		memcpy(dst_chain[i].bh->b_data, src_chain[i].bh->b_data,
+				src_chain[i].bh->b_size);
+		unlock_buffer(dst_chain[i].bh);
+
+		*dst_chain[i].p = dst_chain[i].key;
+
+		flush_dcache_page(dst_chain[i].bh->b_page);
+		set_buffer_uptodate(dst_chain[i].bh);
+		mark_buffer_dirty(dst_chain[i].bh);
+		sync_dirty_buffer(dst_chain[i].bh);
+	}
+}
+#endif
 
 /**
  *	ext2_block_to_path - parse the block number into array of offsets
@@ -621,12 +747,12 @@ static int ext2_get_blocks(struct inode *inode,
 {
 	int err = -EIO;
 	int offsets[4];
-	Indirect chain[4];
+	Indirect chain[4], copy_chain[4];
 	Indirect *partial;
 	ext2_fsblk_t goal;
 	int indirect_blks;
 	int blocks_to_boundary = 0;
-	int depth;
+	int depth, shared_depth = 0;
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	int count = 0;
 	ext2_fsblk_t first_block = 0;
@@ -638,7 +764,14 @@ static int ext2_get_blocks(struct inode *inode,
 	if (depth == 0)
 		return (err);
 
+#ifdef CONFIG_EXT2_FS_COW
+	partial = create
+		? ext2_cow_get_branch(inode, depth, offsets, chain, &err,
+				copy_chain, &shared_depth)
+		: ext2_get_branch(inode, depth, offsets, chain, &err);
+#else
 	partial = ext2_get_branch(inode, depth, offsets, chain, &err);
+#endif
 	/* Simplest case - block found, no allocation needed */
 	if (!partial) {
 		first_block = le32_to_cpu(chain[depth - 1].key);
@@ -691,7 +824,14 @@ static int ext2_get_blocks(struct inode *inode,
 			brelse(partial->bh);
 			partial--;
 		}
+#ifdef CONFIG_EXT2_FS_COW
+		partial = create
+			? ext2_cow_get_branch(inode, depth, offsets, chain,
+					&err, copy_chain, &shared_depth)
+			: ext2_get_branch(inode, depth, offsets, chain, &err);
+#else
 		partial = ext2_get_branch(inode, depth, offsets, chain, &err);
+#endif
 		if (!partial) {
 			count++;
 			mutex_unlock(&ei->truncate_mutex);
@@ -745,6 +885,9 @@ static int ext2_get_blocks(struct inode *inode,
 	}
 
 	ext2_splice_branch(inode, iblock, partial, indirect_blks, count);
+	if (shared_depth > 0)
+		ext2_cow_copy_blocks_chain(copy_chain, chain, shared_depth,
+				depth, offsets);
 	mutex_unlock(&ei->truncate_mutex);
 	set_buffer_new(bh_result);
 got_it:
@@ -1378,6 +1521,14 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	ei->i_block_group = (ino - 1) / EXT2_INODES_PER_GROUP(inode->i_sb);
 	ei->i_dir_start_lookup = 0;
 
+#ifdef CONFIG_EXT2_FS_COW
+	ei->i_cow_next = le32_to_cpu(raw_inode->osd1.linux1.l_i_cow_next);
+	ei->i_cow_prev = le32_to_cpu(raw_inode->osd2.linux2.l_i_cow_prev);
+
+	if (ei->i_cow_next == 0)
+		ei->i_cow_next = ei->i_cow_prev = ino;
+#endif
+
 	/*
 	 * NOTE! The in-memory inode i_data array is in little-endian order
 	 * even on big-endian machines: we do NOT byteswap the block numbers!
@@ -1487,6 +1638,12 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 	raw_inode->i_frag = ei->i_frag_no;
 	raw_inode->i_fsize = ei->i_frag_size;
 	raw_inode->i_file_acl = cpu_to_le32(ei->i_file_acl);
+
+#ifdef CONFIG_EXT2_FS_COW
+	raw_inode->osd1.linux1.l_i_cow_next = cpu_to_le32(ei->i_cow_next);
+	raw_inode->osd2.linux2.l_i_cow_prev = cpu_to_le32(ei->i_cow_prev);
+#endif
+
 	if (!S_ISREG(inode->i_mode))
 		raw_inode->i_dir_acl = cpu_to_le32(ei->i_dir_acl);
 	else {
